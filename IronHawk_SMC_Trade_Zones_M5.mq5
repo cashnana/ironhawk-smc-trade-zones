@@ -194,12 +194,12 @@ int OnCalculate(const int rates_total, const int prev_calculated, const datetime
    for(int i = 1; i < barsToAnalyze; i++)
    {
       // Scan for organic SMC setups
-      ScanForOrganicSetups(i, rates_total, high, low, close);
+      ScanForOrganicSetups(i, rates_total, high, low, close, open);
       
       // Retail frequency mode (fallback)
       if(dailySignalCount < MinimumDailySignals)
       {
-         ScanForRetailSetups(i, rates_total, high, low, close);
+         ScanForRetailSetups(i, rates_total, high, low, close, open);
       }
    }
 
@@ -220,22 +220,24 @@ int OnCalculate(const int rates_total, const int prev_calculated, const datetime
 //+------------------------------------------------------------------+
 
 void ScanForOrganicSetups(int barIndex, int rates_total, const double &high[], 
-                          const double &low[], const double &close[])
+                          const double &low[], const double &close[], const double &open[])
 {
    // Identify swing points
    PriceLevel swingHigh = {0, 0, -1};
    PriceLevel swingLow = {0, 0, -1};
    
-   if(IsSwingHigh(barIndex, high, low) > 0)
+   double sh = IsSwingHigh(barIndex, high, low);
+   if(sh > 0)
    {
-      swingHigh.price = high[barIndex];
+      swingHigh.price = sh;
       swingHigh.time = Time[barIndex];
       swingHigh.barIndex = barIndex;
    }
    
-   if(IsSwingLow(barIndex, high, low) > 0)
+   double sl = IsSwingLow(barIndex, high, low);
+   if(sl > 0)
    {
-      swingLow.price = low[barIndex];
+      swingLow.price = sl;
       swingLow.time = Time[barIndex];
       swingLow.barIndex = barIndex;
    }
@@ -251,12 +253,12 @@ void ScanForOrganicSetups(int barIndex, int rates_total, const double &high[],
    bool fvgExists = DetectFVG(barIndex, high, low);
 
    // Identify Order Blocks
-   bool orderBlockExists = DetectOrderBlock(barIndex, high, low, close);
+   bool orderBlockExists = DetectOrderBlock(barIndex, high, low, close, open);
 
    // Multi-indicator confirmation
-   bool rsiConfirm = CheckRSI(barIndex, close);
-   bool macdConfirm = CheckMACD(barIndex, close);
-   bool emaAlign = CheckEMAAlignment(barIndex, close);
+   bool rsiConfirm = CheckRSI(barIndex);
+   bool macdConfirm = CheckMACD(barIndex);
+   bool emaAlign = CheckEMAAlignment(barIndex);
 
    // Create setup if all conditions met
    if((liquiditySweepBullish || liquiditySweepBearish) && bosCCh && (fvgExists || orderBlockExists))
@@ -283,7 +285,7 @@ void ScanForOrganicSetups(int barIndex, int rates_total, const double &high[],
 //+------------------------------------------------------------------+
 
 void ScanForRetailSetups(int barIndex, int rates_total, const double &high[], 
-                         const double &low[], const double &close[])
+                         const double &low[], const double &close[], const double &open[])
 {
    // Only generate retail signals at scheduled times
    MqlDateTime timeStruct;
@@ -299,11 +301,11 @@ void ScanForRetailSetups(int barIndex, int rates_total, const double &high[],
    // Majority vote from EMA 20/50, MACD, RSI
    int bullishVotes = 0;
    
-   if(CheckEMAAlignment(barIndex, close))
+   if(CheckEMAAlignment(barIndex))
       bullishVotes++;
-   if(CheckMACD(barIndex, close))
+   if(CheckMACD(barIndex))
       bullishVotes++;
-   if(CheckRSI(barIndex, close))
+   if(CheckRSI(barIndex))
       bullishVotes++;
 
    if(bullishVotes >= 2) // At least 2 out of 3 indicators agree
@@ -369,11 +371,11 @@ Setup CreateSetup(int barIndex, bool isBullish, string setupType,
    GetMACD(barIndex, macd, macdSignal);
    setup.macdValue = macd;
    setup.macdSignal = macdSignal;
-   setup.emaAlignment = CheckEMAAlignment(barIndex, close);
+   setup.emaAlignment = CheckEMAAlignment(barIndex);
    
    setup.hasLiquiditySweep = true;
    setup.hasFVG = DetectFVG(barIndex, high, low);
-   setup.hasOrderBlock = DetectOrderBlock(barIndex, high, low, close);
+   setup.hasOrderBlock = DetectOrderBlock(barIndex, high, low, close, open);
    setup.bosCCh = true;
    
    return setup;
@@ -419,7 +421,7 @@ Setup CreateRetailSetup(int barIndex, bool isBullish, const double &high[],
    GetMACD(barIndex, macd, macdSignal);
    setup.macdValue = macd;
    setup.macdSignal = macdSignal;
-   setup.emaAlignment = CheckEMAAlignment(barIndex, close);
+   setup.emaAlignment = CheckEMAAlignment(barIndex);
    
    return setup;
 }
@@ -515,7 +517,8 @@ bool DetectFVG(int barIndex, const double &high[], const double &low[])
    return (gap1 >= FVG_Minimum_Pips || gap2 >= FVG_Minimum_Pips);
 }
 
-bool DetectOrderBlock(int barIndex, const double &high[], const double &low[], const double &close[])
+bool DetectOrderBlock(int barIndex, const double &high[], const double &low[], 
+                      const double &close[], const double &open[])
 {
    if(barIndex < 3)
       return false;
@@ -523,26 +526,27 @@ bool DetectOrderBlock(int barIndex, const double &high[], const double &low[], c
    // Order Block: strong rejection candle with size
    double bodySize = MathAbs(close[barIndex] - open[barIndex]);
    double candle_high_low = high[barIndex] - low[barIndex];
-   double bodyRatio = bodySize / candle_high_low;
+   double bodyRatio = candle_high_low > 0 ? bodySize / candle_high_low : 0;
    
    // Strong directional candle with visible structure
-   return bodyRatio > 0.6 && candle_high_low > iATR(Symbol(), PERIOD_M5, ATR_Period, barIndex) * 1.5;
+   double atr = iATR(Symbol(), PERIOD_M5, ATR_Period, barIndex);
+   return bodyRatio > 0.6 && candle_high_low > atr * 1.5;
 }
 
-bool CheckRSI(int barIndex, const double &close[])
+bool CheckRSI(int barIndex)
 {
    int rsiVal = iRSI(Symbol(), PERIOD_M5, RSI_Period, barIndex);
    return (rsiVal > 30 && rsiVal < 70); // Neutral zone = setup potential
 }
 
-bool CheckMACD(int barIndex, const double &close[])
+bool CheckMACD(int barIndex)
 {
    double macd, signal;
    GetMACD(barIndex, macd, signal);
    return (macd > signal); // Bullish alignment
 }
 
-bool CheckEMAAlignment(int barIndex, const double &close[])
+bool CheckEMAAlignment(int barIndex)
 {
    double ema20 = iMA(Symbol(), PERIOD_M5, EMA_20_Period, 0, MODE_EMA, PRICE_CLOSE, barIndex);
    double ema50 = iMA(Symbol(), PERIOD_M5, EMA_50_Period, 0, MODE_EMA, PRICE_CLOSE, barIndex);
@@ -559,8 +563,8 @@ void GetMACD(int barIndex, double &macd, double &signal)
    CopyBuffer(handle, 0, barIndex, 1, macdBuffer);
    CopyBuffer(handle, 1, barIndex, 1, signalBuffer);
    
-   macd = macdBuffer[0];
-   signal = signalBuffer[0];
+   macd = (ArraySize(macdBuffer) > 0) ? macdBuffer[0] : 0;
+   signal = (ArraySize(signalBuffer) > 0) ? signalBuffer[0] : 0;
 }
 
 //+------------------------------------------------------------------+
